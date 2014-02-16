@@ -202,6 +202,7 @@ zil_read_log_block(zilog_t *zilog, const blkptr_t *bp, blkptr_t *nbp, void *dst,
 	arc_buf_t *abuf = NULL;
 	zbookmark_t zb;
 	int error;
+	zio_cksum_t cksum;
 
 	if (zilog->zl_header->zh_claim_txg == 0)
 		zio_flags |= ZIO_FLAG_SPECULATIVE | ZIO_FLAG_SCRUB;
@@ -215,21 +216,24 @@ zil_read_log_block(zilog_t *zilog, const blkptr_t *bp, blkptr_t *nbp, void *dst,
 	error = arc_read(NULL, zilog->zl_spa, bp, arc_getbuf_func, &abuf,
 	    ZIO_PRIORITY_SYNC_READ, zio_flags, &aflags, &zb);
 
-	if (error == 0) {
-		zio_cksum_t cksum = bp->blk_cksum;
+	if (error)
+		return (error);
 
-		/*
-		 * Validate the checksummed log block.
-		 *
-		 * Sequence numbers should be... sequential.  The checksum
-		 * verifier for the next block should be bp's checksum plus 1.
-		 *
-		 * Also check the log chain linkage and size used.
-		 */
-		cksum.zc_word[ZIL_ZC_SEQ]++;
+	cksum = bp->blk_cksum;
 
-		if (BP_GET_CHECKSUM(bp) == ZIO_CHECKSUM_ZILOG2) {
-			zil_chain_t *zilc = abuf->b_data;
+	/*
+	 * Validate the checksummed log block.
+	 *
+	 * Sequence numbers should be... sequential.  The checksum
+	 * verifier for the next block should be bp's checksum plus 1.
+	 *
+	 * Also check the log chain linkage and size used.
+	 */
+	cksum.zc_word[ZIL_ZC_SEQ]++;
+
+	if (BP_GET_CHECKSUM(bp) == ZIO_CHECKSUM_ZILOG2) {
+		if (ABD_IS_LINEAR(abuf->b_data)) {
+			zil_chain_t *zilc = ABD_TO_LINEAR(abuf->b_data);
 			char *lr = (char *)(zilc + 1);
 			uint64_t len = zilc->zc_nused - sizeof (zil_chain_t);
 
@@ -237,12 +241,39 @@ zil_read_log_block(zilog_t *zilog, const blkptr_t *bp, blkptr_t *nbp, void *dst,
 			    sizeof (cksum)) || BP_IS_HOLE(&zilc->zc_next_blk)) {
 				error = SET_ERROR(ECKSUM);
 			} else {
-				bcopy(lr, dst, len);
+				memcpy(dst, lr, len);
 				*end = (char *)dst + len;
 				*nbp = zilc->zc_next_blk;
 			}
 		} else {
-			char *lr = abuf->b_data;
+			off_t nused_off, lr_off, nbp_off;
+			uint64_t len;
+			blkptr_t nbp_temp;
+
+			/* zilc->zc_nused, zilc->zc_next_blk, lr */
+			nused_off = offsetof(zil_chain_t, zc_nused);
+			nbp_off = offsetof(zil_chain_t, zc_next_blk);
+			lr_off = sizeof (zil_chain_t);
+
+			abd_copy_to_buf_off(&len, abuf->b_data,
+			    sizeof (uint64_t), nused_off);
+			len -= sizeof (zil_chain_t);
+
+			abd_copy_to_buf_off(&nbp_temp, abuf->b_data,
+			    sizeof (blkptr_t), nbp_off);
+
+			if (bcmp(&cksum, &nbp_temp.blk_cksum,
+			    sizeof (cksum)) || BP_IS_HOLE(&nbp_temp)) {
+				error = SET_ERROR(ECKSUM);
+			} else {
+				abd_copy_to_buf_off(dst, abuf->b_data, len, lr_off);
+				*end = (char *)dst + len;
+				*nbp = nbp_temp;
+			}
+		}
+	} else {
+		if (ABD_IS_LINEAR(abuf->b_data)) {
+			char *lr = ABD_TO_LINEAR(abuf->b_data);
 			uint64_t size = BP_GET_LSIZE(bp);
 			zil_chain_t *zilc = (zil_chain_t *)(lr + size) - 1;
 
@@ -251,14 +282,40 @@ zil_read_log_block(zilog_t *zilog, const blkptr_t *bp, blkptr_t *nbp, void *dst,
 			    (zilc->zc_nused > (size - sizeof (*zilc)))) {
 				error = SET_ERROR(ECKSUM);
 			} else {
-				bcopy(lr, dst, zilc->zc_nused);
+				memcpy(dst, lr, zilc->zc_nused);
 				*end = (char *)dst + zilc->zc_nused;
 				*nbp = zilc->zc_next_blk;
 			}
-		}
+		} else {
+			uint64_t size = BP_GET_LSIZE(bp);
+			size_t zilc_off, nused_off, nbp_off;
+			uint64_t nused;
+			blkptr_t nbp_temp;
 
-		VERIFY(arc_buf_remove_ref(abuf, &abuf));
+			zilc_off = size - sizeof (zil_chain_t);
+			/* zilc->zc_nused, zilc->zc_next_blk */
+			nused_off = zilc_off + offsetof(zil_chain_t, zc_nused);
+			nbp_off = zilc_off + offsetof(zil_chain_t, zc_next_blk);
+
+			abd_copy_to_buf_off(&nused, abuf->b_data,
+			    sizeof (uint64_t), nused_off);
+
+			abd_copy_to_buf_off(&nbp_temp, abuf->b_data,
+			    sizeof (blkptr_t), nbp_off);
+
+			if (bcmp(&cksum, &nbp_temp,
+			    sizeof(cksum)) || BP_IS_HOLE(&nbp_temp) ||
+			    (nused > (size - sizeof (zil_chain_t)))) {
+				error = SET_ERROR(ECKSUM);
+			} else {
+				abd_copy_to_buf(dst, abuf->b_data, nused);
+				*end = (char *)dst + nused;
+				*nbp = nbp_temp;
+			}
+		}
 	}
+
+	VERIFY(arc_buf_remove_ref(abuf, &abuf));
 
 	return (error);
 }
@@ -293,7 +350,7 @@ zil_read_log_data(zilog_t *zilog, const lr_write_t *lr, void *wbuf)
 
 	if (error == 0) {
 		if (wbuf != NULL)
-			bcopy(abuf->b_data, wbuf, arc_buf_size(abuf));
+			abd_copy_to_buf(wbuf, abuf->b_data, arc_buf_size(abuf));
 		(void) arc_buf_remove_ref(abuf, &abuf);
 	}
 
@@ -912,7 +969,7 @@ zil_lwb_write_init(zilog_t *zilog, lwb_t *lwb)
 			lwb->lwb_fastwrite = 1;
 		}
 		lwb->lwb_zio = zio_rewrite(zilog->zl_root_zio, zilog->zl_spa,
-		    0, &lwb->lwb_blk, lwb->lwb_buf, BP_GET_LSIZE(&lwb->lwb_blk),
+		    0, &lwb->lwb_blk, LINEAR_TO_ABD(lwb->lwb_buf), BP_GET_LSIZE(&lwb->lwb_blk),
 		    zil_lwb_write_done, lwb, ZIO_PRIORITY_SYNC_WRITE,
 		    ZIO_FLAG_CANFAIL | ZIO_FLAG_DONT_PROPAGATE |
 		    ZIO_FLAG_FASTWRITE, &zb);

@@ -1581,7 +1581,7 @@ load_nvlist(spa_t *spa, uint64_t obj, nvlist_t **value)
 	if (error)
 		return (error);
 
-	nvsize = *(uint64_t *)db->db_data;
+	nvsize = *(uint64_t *)ABD_TO_LINEAR(db->db_data);
 	dmu_buf_rele(db, FTAG);
 
 	packed = kmem_alloc(nvsize, KM_PUSHPAGE | KM_NODEBUG);
@@ -1863,7 +1863,7 @@ spa_load_verify_done(zio_t *zio)
 		else
 			atomic_add_64(&sle->sle_data_count, 1);
 	}
-	zio_data_buf_free(zio->io_data, zio->io_size);
+	zio_data_buf_free(ABD_TO_LINEAR(zio->io_data), zio->io_size);
 }
 
 /*ARGSUSED*/
@@ -1876,7 +1876,7 @@ spa_load_verify_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 		size_t size = BP_GET_PSIZE(bp);
 		void *data = zio_data_buf_alloc(size);
 
-		zio_nowait(zio_read(rio, spa, bp, data, size,
+		zio_nowait(zio_read(rio, spa, bp, LINEAR_TO_ABD(data), size,
 		    spa_load_verify_done, rio->io_private, ZIO_PRIORITY_SCRUB,
 		    ZIO_FLAG_SPECULATIVE | ZIO_FLAG_CANFAIL |
 		    ZIO_FLAG_SCRUB | ZIO_FLAG_RAW, zb));
@@ -5837,7 +5837,7 @@ spa_sync_nvlist(spa_t *spa, uint64_t obj, nvlist_t *nv, dmu_tx_t *tx)
 
 	VERIFY(0 == dmu_bonus_hold(spa->spa_meta_objset, obj, FTAG, &db));
 	dmu_buf_will_dirty(db, tx);
-	*(uint64_t *)db->db_data = nvsize;
+	*(uint64_t *)ABD_TO_LINEAR(db->db_data) = nvsize;
 	dmu_buf_rele(db, FTAG);
 }
 
