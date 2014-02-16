@@ -862,7 +862,7 @@ vdev_metaslab_init(vdev_t *vd, uint64_t txg)
 				if (error)
 					return (error);
 				ASSERT3U(db->db_size, >=, sizeof (smo));
-				bcopy(db->db_data, &smo, sizeof (smo));
+				abd_copy_to_buf(&smo, db->db_data, sizeof (smo));
 				ASSERT3U(smo.smo_object, ==, object);
 				dmu_buf_rele(db, FTAG);
 			}
@@ -930,12 +930,12 @@ vdev_probe_done(zio_t *zio)
 			    ZIO_CHECKSUM_OFF, vdev_probe_done, vps,
 			    ZIO_PRIORITY_SYNC_WRITE, vps->vps_flags, B_TRUE));
 		} else {
-			zio_buf_free(zio->io_data, zio->io_size);
+			zio_buf_free(ABD_TO_LINEAR(zio->io_data), zio->io_size);
 		}
 	} else if (zio->io_type == ZIO_TYPE_WRITE) {
 		if (zio->io_error == 0)
 			vps->vps_writeable = 1;
-		zio_buf_free(zio->io_data, zio->io_size);
+		zio_buf_free(ABD_TO_LINEAR(zio->io_data), zio->io_size);
 	} else if (zio->io_type == ZIO_TYPE_NULL) {
 		zio_t *pio;
 
@@ -1052,7 +1052,7 @@ vdev_probe(vdev_t *vd, zio_t *zio)
 		zio_nowait(zio_read_phys(pio, vd,
 		    vdev_label_offset(vd->vdev_psize, l,
 		    offsetof(vdev_label_t, vl_pad2)),
-		    VDEV_PAD_SIZE, zio_buf_alloc(VDEV_PAD_SIZE),
+		    VDEV_PAD_SIZE, LINEAR_TO_ABD(zio_buf_alloc(VDEV_PAD_SIZE)),
 		    ZIO_CHECKSUM_OFF, vdev_probe_done, vps,
 		    ZIO_PRIORITY_SYNC_READ, vps->vps_flags, B_TRUE));
 	}
@@ -1885,7 +1885,7 @@ vdev_dtl_load(vdev_t *vd)
 		return (error);
 
 	ASSERT3U(db->db_size, >=, sizeof (*smo));
-	bcopy(db->db_data, smo, sizeof (*smo));
+	abd_copy_to_buf(smo, db->db_data, sizeof (*smo));
 	dmu_buf_rele(db, FTAG);
 
 	mutex_enter(&vd->vdev_dtl_lock);
@@ -1954,7 +1954,7 @@ vdev_dtl_sync(vdev_t *vd, uint64_t txg)
 	VERIFY(0 == dmu_bonus_hold(mos, smo->smo_object, FTAG, &db));
 	dmu_buf_will_dirty(db, tx);
 	ASSERT3U(db->db_size, >=, sizeof (*smo));
-	bcopy(smo, db->db_data, sizeof (*smo));
+	abd_copy_from_buf(db->db_data, smo, sizeof (*smo));
 	dmu_buf_rele(db, FTAG);
 
 	dmu_tx_commit(tx);
