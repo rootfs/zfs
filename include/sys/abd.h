@@ -61,8 +61,7 @@ extern "C" {
 	abd;				\
 })
 
-/* #ifdef _KERNEL */
-#if 0
+#ifdef _KERNEL
 
 /* purely virtual structure to prevent dereferencing */
 struct abd;
