@@ -522,21 +522,21 @@ do_abd_uiomove_off(abd_t *__abd, size_t n, enum uio_rw rw, uio_t *uio, size_t of
 			 * iov->iov_base = user data pointer
 			 */
 			if (rw == UIO_READ) {
-				if (abd_copy_to_user_off(iov->iov_base, __abd,
+				if (do_abd_copy_to_user_off(iov->iov_base, __abd,
 				    cnt, off))
 					return (EFAULT);
 			} else {
-				if (abd_copy_from_user_off(__abd, iov->iov_base,
+				if (do_abd_copy_from_user_off(__abd, iov->iov_base,
 				    cnt, off))
 					return (EFAULT);
 			}
 			break;
 		case UIO_SYSSPACE:
 			if (rw == UIO_READ)
-				abd_copy_to_buf_off(iov->iov_base, __abd,
+				do_abd_copy_to_buf_off(iov->iov_base, __abd,
 				    cnt, off);
 			else
-				abd_copy_from_buf_off(__abd, iov->iov_base,
+				do_abd_copy_from_buf_off(__abd, iov->iov_base,
 				    cnt, off);
 			break;
 		}
@@ -575,12 +575,12 @@ do_abd_uiocopy_off(abd_t *__abd, size_t n, enum uio_rw rw, uio_t *uio, size_t *c
 			 */
 			if (rw == UIO_READ) {
 				/* UIO_READ = copy data from kernel to user */
-				if (abd_copy_to_user_off(iov->iov_base, __abd,
+				if (do_abd_copy_to_user_off(iov->iov_base, __abd,
 				    cnt, off))
 					return (EFAULT);
 			} else {
 				/* UIO_WRITE = copy data from user to kernel */
-				if (abd_copy_from_user_off(__abd, iov->iov_base,
+				if (do_abd_copy_from_user_off(__abd, iov->iov_base,
 				    cnt, off))
 					return (EFAULT);
 			}
@@ -588,10 +588,10 @@ do_abd_uiocopy_off(abd_t *__abd, size_t n, enum uio_rw rw, uio_t *uio, size_t *c
 
 		case UIO_SYSSPACE:
 			if (rw == UIO_READ)
-				abd_copy_to_buf_off(iov->iov_base, __abd,
+				do_abd_copy_to_buf_off(iov->iov_base, __abd,
 				    cnt, off);
 			else
-				abd_copy_from_buf_off(__abd, iov->iov_base,
+				do_abd_copy_from_buf_off(__abd, iov->iov_base,
 				    cnt, off);
 			break;
 		}
