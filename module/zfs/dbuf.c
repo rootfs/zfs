@@ -2461,7 +2461,8 @@ dbuf_sync_leaf(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 		ASSERT(db->db.db_data == NULL);
 	} else if (db->db_state == DB_FILL) {
 		/* This buffer was freed and is now being re-filled */
-		ASSERT(ABD_TO_LINEAR(db->db.db_data) != dr->dt.dl.dr_data);
+		ASSERT(!ABD_IS_LINEAR(db->db.db_data) ||
+		    ABD_TO_LINEAR(db->db.db_data) != dr->dt.dl.dr_data);
 	} else {
 		ASSERT(db->db_state == DB_CACHED || db->db_state == DB_NOFILL);
 	}
