@@ -24,6 +24,7 @@
  */
 
 #include <sys/abd.h>
+#ifdef _KERNEL
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -31,6 +32,121 @@
 #include <linux/gfp.h>
 #include <linux/pagemap.h>
 #include <linux/kmap_compat.h>
+
+#else	/* _KERNEL */
+
+/*
+ * Userspace compatibility layer
+ */
+
+/*
+ * page
+ */
+#ifndef PAGE_SIZE
+#define PAGE_SIZE 4096
+#endif
+
+struct page;
+
+#define alloc_page(gfp)		((struct page *)umem_alloc(PAGE_SIZE, UMEM_DEFAULT))
+#define __free_page(page)	umem_free(page, PAGE_SIZE)
+
+/*
+ * scatterlist
+ */
+struct scatterlist {
+	struct page *page;
+	int length;
+	int end;
+};
+
+static void
+sg_init_table(struct scatterlist *sg, int nr) {
+	memset(sg, 0, nr * sizeof(struct scatterlist));
+	sg[nr - 1].end = 1;
+}
+
+static inline void
+sg_set_page(struct scatterlist *sg, struct page *page, unsigned int len,
+    unsigned int offset) {
+	/* currently we don't use offset */
+	ASSERT(offset == 0);
+	sg->page = page;
+	sg->length = len;
+}
+
+static inline struct page *
+sg_page(struct scatterlist *sg) {
+	return sg->page;
+}
+
+/*
+ * sg_mapping_iter
+ */
+struct sg_mapping_iter {
+	struct scatterlist *sg;
+	int started;
+	int nents;
+	int length;
+	void *addr;
+};
+
+void
+__sg_miter_start(struct sg_mapping_iter *miter, struct scatterlist *sg,
+    unsigned int nents) {
+	memset(miter, 0, sizeof(struct sg_mapping_iter));
+	miter->sg = sg;
+	miter->nents = nents;
+}
+#define sg_miter_start(miter, sg, nents, flags) __sg_miter_start(miter, sg, nents)
+#define sg_miter_stop(miter) do { } while (0)
+
+int
+sg_miter_next(struct sg_mapping_iter *miter) {
+	if (!miter->nents)
+		return 0;
+
+	if (!miter->started)
+		miter->started = 1;
+	else if (miter->sg->end)
+		return 0;
+	else
+		miter->sg++;
+
+	miter->nents--;
+	miter->length = miter->sg->length;
+	miter->addr = (void *)miter->sg->page;
+	return 1;
+}
+
+/*
+ * misc
+ */
+#ifndef DIV_ROUND_UP
+#define DIV_ROUND_UP(n,d)		(((n) + (d) - 1) / (d))
+#endif
+
+#ifndef unlikely
+#define unlikely(x)			(x)
+#endif
+
+#define kmap(page)			((void *)page)
+#define kunmap(page)			do { } while (0)
+#define zfs_kmap_atomic(page, type)	((void *)page)
+#define zfs_kunmap_atomic(addr, type)	do { } while (0)
+#define local_irq_save(flags)		do { flags = 0; } while (0)
+#define local_irq_restore(flags)	do { } while (0)
+#define flush_kernel_dcache_page(page)	do { } while (0)
+#define flush_dcache_page(page)		do { } while (0)
+#define set_current_state(state)	do { } while (0)
+static inline long
+schedule_timeout(long timeout)
+{
+	sleep(timeout);
+	return 0;
+}
+
+#endif	/* _KERNEL */
 
 #define ABD_MITER_WFLAGS (SG_MITER_ATOMIC|SG_MITER_TO_SG)
 #define ABD_MITER_RFLAGS (SG_MITER_ATOMIC|SG_MITER_FROM_SG)
@@ -426,6 +542,7 @@ do_abd_zero_off(abd_t *__abd, size_t size, size_t off)
 	local_irq_restore(flags);
 }
 
+#ifdef _KERNEL
 int
 do_abd_copy_to_user_off(void __user *buf, abd_t *__abd, size_t size, size_t off)
 {
@@ -637,16 +754,17 @@ do_abd_bio_nr_pages_off(abd_t *__abd, unsigned int bio_size, size_t off)
 	return ((abd->abd_offset + off + bio_size + PAGE_SIZE-1)>>PAGE_SHIFT) -
 	    ((abd->abd_offset + off)>>PAGE_SHIFT);
 }
+#endif	/* _KERNEL */
 
 abd_t *
 do_abd_get_offset(abd_t *__sabd, size_t off)
 {
 	arc_buf_data_t *abd;
 	arc_buf_data_t *sabd = ABD_CHECK(__sabd);
-
+#ifdef container_of
 	ASSERTV(arc_buf_data_t *oabd = container_of(sabd->abd_sgl, arc_buf_data_t, __abd_sgl[0]));
 	ASSERT(oabd->abd_magic == ARC_BUF_DATA_MAGIC);
-
+#endif
 	abd = kmem_alloc(sizeof(arc_buf_data_t), KM_PUSHPAGE);
 
 	ASSERT(abd);

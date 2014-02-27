@@ -61,7 +61,6 @@ extern "C" {
 	abd;				\
 })
 
-#ifdef _KERNEL
 
 /* purely virtual structure to prevent dereferencing */
 struct abd;
@@ -134,16 +133,16 @@ void do_abd_copy_to_buf_off(void *, abd_t *, size_t, size_t);
 int do_abd_cmp(abd_t *, abd_t *, size_t);
 int do_abd_cmp_buf_off(abd_t *, const void *, size_t, size_t);
 void do_abd_zero_off(abd_t *, size_t, size_t);
+#ifdef _KERNEL
 int do_abd_copy_to_user_off(void __user *, abd_t *, size_t, size_t);
 int do_abd_copy_from_user_off(abd_t *, const void __user *, size_t, size_t);
 int do_abd_uiomove_off(abd_t *, size_t, enum uio_rw, uio_t *, size_t);
-int do_abd_uiomove(abd_t *, size_t, enum uio_rw, uio_t *);
 int do_abd_uiocopy_off(abd_t *, size_t, enum uio_rw, uio_t *, size_t *, size_t);
-int do_abd_uiocopy(abd_t *, size_t, enum uio_rw, uio_t *, size_t *);
-abd_t *do_abd_get_offset(abd_t *, size_t);
-void do_abd_put_offset(abd_t *);
 unsigned int do_abd_bio_map_off(struct bio *, abd_t *, unsigned int, size_t);
 unsigned long do_abd_bio_nr_pages_off(abd_t *, unsigned int, size_t);
+#endif
+abd_t *do_abd_get_offset(abd_t *, size_t);
+void do_abd_put_offset(abd_t *);
 #define do_abd_borrow_linear(a, n) zio_buf_alloc(n)
 #define do_abd_borrow_linear_copy(a, n)		\
 ({						\
@@ -159,28 +158,6 @@ do {						\
 	zio_buf_free(b, n);			\
 } while (0)
 
-#else	/* _KERNEL */
-
-typedef void abd_t;
-
-#define ABD_IS_SCATTER(abd)	(0)
-#define ABD_IS_LINEAR(abd)	(1)
-#define ASSERT_ABD_SCATTER(abd)	((void)0)
-#define ASSERT_ABD_LINEAR(abd)	((void)0)
-
-#define abd_alloc	zio_data_buf_alloc
-#define abd_free	zio_data_buf_free
-
-/*
- * Userspace has only linear buffers, so no multiplexing
- */
-#define ABD_FUNC_WRAPPER(abd, func, ...)		u_##func(__VA_ARGS__)
-#define ABD_RET_FUNC_WRAPPER(type, abd, func, ...)	u_##func(__VA_ARGS__)
-#define ABD_FUNC2_WRAPPER(abd1, abd2, func, ...)	u_##func(__VA_ARGS__)
-#define ABD_RET_FUNC2_WRAPPER(type, abd1, abd2, func, ...) u_##func(__VA_ARGS__)
-
-#endif	/* _KERNEL */
-
 /*
  * ABD functions for userspace and linear buffer
  * Should not be used directly
@@ -194,13 +171,13 @@ typedef void abd_t;
 #define u_abd_cmp(a, b, n)			memcmp(a, b, n)
 #define u_abd_cmp_buf_off(a, b, n, off)		memcmp((void *)(a)+(off), b, n)
 #define u_abd_zero_off(a, n, off)		(void)memset((void *)(a)+(off), 0, n)
+#define u_abd_get_offset(a, off)		(abd_t *)((void *)(a)+(off))
+#define u_abd_put_offset(a)			do { } while (0)
+#ifdef _KERNEL
 #define u_abd_copy_to_user_off(a, b, n, off)	copy_to_user(a, (void *)(b)+(off), n)
 #define u_abd_copy_from_user_off(a, b, n, off)	copy_from_user((void *)(a)+(off), b, n)
 #define u_abd_uiomove_off(p, n, rw, uio, off)	uiomove((void *)(p)+(off), n, rw, uio)
 #define u_abd_uiocopy_off(p, n, rw, uio, c, off) uiocopy((void *)(p)+(off), n, rw, uio, c)
-#define u_abd_get_offset(a, off)		(abd_t *)((void *)(a)+(off))
-#define u_abd_put_offset(a)			do { } while (0)
-#ifdef _KERNEL
 #define u_abd_bio_map_off(bio, a, n, off)	bio_map(bio, (void *)(a)+(off), n)
 #define u_abd_bio_nr_pages_off(a, n, off)	bio_nr_pages((void *)(a)+(off), n)
 #endif
@@ -289,6 +266,7 @@ typedef void abd_t;
 #define abd_zero(abd, size) \
 	abd_zero_off(abd, size, 0)
 
+#ifdef _KERNEL
 /*
  * Copy from ABD to user buffer.
  */
@@ -326,6 +304,19 @@ typedef void abd_t;
 	abd_uiocopy_off(abd, n, rw, uio, c, 0)
 
 /*
+ * bio_map for ABD.
+ */
+#define abd_bio_map_off(bio, abd, bio_size, off) \
+	ABD_RET_FUNC_WRAPPER(unsigned int, abd, abd_bio_map_off, bio, abd, bio_size, off)
+
+/*
+ * bio_nr_pages for ABD.
+ */
+#define abd_bio_nr_pages_off(abd, bio_size, off) \
+	ABD_RET_FUNC_WRAPPER(unsigned long, abd, abd_bio_nr_pages_off, abd, bio_size, off)
+#endif	/* _KERNEL */
+
+/*
  * Allocate a new ABD to point to offset @off of the original ABD.
  * It shares the underlying buffer with the original ABD.
  * Use abd_put_offset to free. The original ABD(allocated from abd_alloc) must
@@ -340,20 +331,6 @@ typedef void abd_t;
  */
 #define abd_put_offset(abd) \
 	ABD_FUNC_WRAPPER(abd, abd_put_offset, abd)
-
-#ifdef _KERNEL
-/*
- * bio_map for ABD.
- */
-#define abd_bio_map_off(bio, abd, bio_size, off) \
-	ABD_RET_FUNC_WRAPPER(unsigned int, abd, abd_bio_map_off, bio, abd, bio_size, off)
-
-/*
- * bio_nr_pages for ABD.
- */
-#define abd_bio_nr_pages_off(abd, bio_size, off) \
-	ABD_RET_FUNC_WRAPPER(unsigned long, abd, abd_bio_nr_pages_off, abd, bio_size, off)
-#endif	/* _KERNEL */
 
 /*
  * Borrow a linear buffer for an ABD
