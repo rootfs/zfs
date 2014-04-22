@@ -284,7 +284,7 @@ traverse_visitbp(traverse_data_t *td, const dnode_phys_t *dnp,
 			    zb->zb_level - 1,
 			    zb->zb_blkid * epb + i);
 			err = traverse_visitbp(td, dnp,
-			    &((blkptr_t *)buf->b_data)[i], czb);
+			    &((blkptr_t *)ABD_TO_LINEAR(buf->b_data))[i], czb);
 			if (err != 0) {
 				if (!TD_HARD(td))
 					break;
