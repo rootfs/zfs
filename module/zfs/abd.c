@@ -48,7 +48,7 @@
 
 struct page;
 
-#define alloc_page(gfp)		((struct page *)umem_alloc(PAGE_SIZE, UMEM_DEFAULT))
+#define alloc_page(gfp)		((struct page *)umem_alloc_aligned(PAGE_SIZE, PAGE_SIZE, UMEM_DEFAULT))
 #define __free_page(page)	umem_free(page, PAGE_SIZE)
 
 /*

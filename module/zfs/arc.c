@@ -1102,6 +1102,14 @@ arc_buf_sigsegv(int sig, siginfo_t *si, void *unused)
 {
 	panic("Got SIGSEGV at address: 0x%lx\n", (long) si->si_addr);
 }
+
+static int
+arc_abd_watch(const void *buf, uint64_t len, void *private)
+{
+	int prot = *(int *)private;
+	ASSERT0(mprotect((void *)buf, len, prot));
+	return 0;
+}
 #endif
 
 /* ARGSUSED */
@@ -1110,8 +1118,9 @@ arc_buf_unwatch(arc_buf_t *buf)
 {
 #ifndef _KERNEL
 	if (arc_watch) {
-		ASSERT0(mprotect(buf->b_data, buf->b_hdr->b_size,
-		    PROT_READ | PROT_WRITE));
+		int prot = PROT_READ | PROT_WRITE;
+		abd_iterate_rfunc(buf->b_data, buf->b_hdr->b_size,
+		    arc_abd_watch, &prot);
 	}
 #endif
 }
@@ -1121,8 +1130,11 @@ static void
 arc_buf_watch(arc_buf_t *buf)
 {
 #ifndef _KERNEL
-	if (arc_watch)
-		ASSERT0(mprotect(buf->b_data, buf->b_hdr->b_size, PROT_READ));
+	if (arc_watch) {
+		int prot = PROT_READ;
+		abd_iterate_rfunc(buf->b_data, buf->b_hdr->b_size,
+		    arc_abd_watch, &prot);
+	}
 #endif
 }
 
