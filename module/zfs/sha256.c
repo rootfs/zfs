@@ -96,13 +96,11 @@ SHA256Transform(uint32_t *H, const uint8_t *cp)
 	H[4] += e; H[5] += f; H[6] += g; H[7] += h;
 }
 
-int
-zio_checksum_SHA256_incremental(const void *buf, uint64_t size, void *private)
+void
+zio_checksum_SHA256(const void *buf, uint64_t size, zio_cksum_t *zcp)
 {
-	zio_cksum_t *zcp = private;
-	uint32_t H[8] = { zcp->zc_word[0]>>32, zcp->zc_word[0], zcp->zc_word[1]>>32,
-	    zcp->zc_word[1], zcp->zc_word[2]>>32, zcp->zc_word[2],
-	    zcp->zc_word[3]>>32, zcp->zc_word[3] };
+	uint32_t H[8] = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+	    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
 	uint8_t pad[128];
 	int i, padsize;
 
@@ -126,12 +124,4 @@ zio_checksum_SHA256_incremental(const void *buf, uint64_t size, void *private)
 	    (uint64_t)H[2] << 32 | H[3],
 	    (uint64_t)H[4] << 32 | H[5],
 	    (uint64_t)H[6] << 32 | H[7]);
-	return 0;
-}
-
-void
-zio_checksum_SHA256(const void *buf, uint64_t size, zio_cksum_t *zcp)
-{
-	zio_checksum_SHA256_init(zcp);
-	zio_checksum_SHA256_incremental(buf, size, zcp);
 }

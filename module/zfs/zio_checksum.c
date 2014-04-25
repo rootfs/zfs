@@ -71,8 +71,9 @@ abd_checksum_off(abd_t *abd, uint64_t size, zio_cksum_t *zcp)
 void
 abd_checksum_SHA256(abd_t *abd, uint64_t size, zio_cksum_t *zcp)
 {
-	zio_checksum_SHA256_init(zcp);
-	abd_iterate_rfunc(abd, size, zio_checksum_SHA256_incremental, zcp);
+	void *buf = abd_borrow_linear_copy(abd, size);
+	zio_checksum_SHA256(buf, size, zcp);
+	abd_return_linear(abd, buf, size);
 }
 
 void

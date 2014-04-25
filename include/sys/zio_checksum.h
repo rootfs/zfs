@@ -67,20 +67,6 @@ extern void abd_fletcher_2_byteswap(abd_t *, uint64_t, zio_cksum_t *);
 extern void abd_fletcher_4_native(abd_t *, uint64_t, zio_cksum_t *);
 extern void abd_fletcher_4_byteswap(abd_t *, uint64_t, zio_cksum_t *);
 
-static inline void
-zio_checksum_SHA256_init(zio_cksum_t *zcp)
-{
-	uint32_t H[8] = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-	    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 };
-
-	ZIO_SET_CHECKSUM(zcp,
-	    (uint64_t)H[0] << 32 | H[1],
-	    (uint64_t)H[2] << 32 | H[3],
-	    (uint64_t)H[4] << 32 | H[5],
-	    (uint64_t)H[6] << 32 | H[7]);
-}
-
-extern int zio_checksum_SHA256_incremental(const void *, uint64_t, void *);
 extern void zio_checksum_SHA256(const void *, uint64_t, zio_cksum_t *);
 
 extern void zio_checksum_compute(zio_t *zio, enum zio_checksum checksum,
