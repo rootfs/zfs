@@ -726,7 +726,7 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 			error = SET_ERROR(EDQUOT);
 			break;
 		}
-
+		/* TODO: abd can't handle xuio */
 		if (xuio && abuf == NULL) {
 			ASSERT(i_iov < iovcnt);
 			aiov = &iovp[i_iov];
@@ -753,7 +753,7 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 			    max_blksz);
 			ASSERT(abuf != NULL);
 			ASSERT(arc_buf_size(abuf) == max_blksz);
-			if ((error = uiocopy(abuf->b_data, max_blksz,
+			if ((error = abd_uiocopy(abuf->b_data, max_blksz,
 			    UIO_WRITE, uio, &cbytes))) {
 				dmu_return_arcbuf(abuf);
 				break;
@@ -815,6 +815,7 @@ zfs_write(struct inode *ip, uio_t *uio, int ioflag, cred_t *cr)
 			 * block-aligned, use assign_arcbuf().  Otherwise,
 			 * write via dmu_write().
 			 */
+			/* TODO: abd can't handle xuio*/
 			if (tx_bytes < max_blksz && (!write_eof ||
 			    aiov->iov_base != abuf->b_data)) {
 				ASSERT(xuio);

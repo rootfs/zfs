@@ -28,6 +28,7 @@
 #include <sys/zio.h>
 #include <sys/zio_checksum.h>
 #include <sys/zil.h>
+#include <sys/abd.h>
 #include <zfs_fletcher.h>
 
 /*
@@ -62,22 +63,58 @@
 
 /*ARGSUSED*/
 static void
-zio_checksum_off(const void *buf, uint64_t size, zio_cksum_t *zcp)
+abd_checksum_off(abd_t *abd, uint64_t size, zio_cksum_t *zcp)
 {
 	ZIO_SET_CHECKSUM(zcp, 0, 0, 0, 0);
+}
+
+void
+abd_checksum_SHA256(abd_t *abd, uint64_t size, zio_cksum_t *zcp)
+{
+	void *buf = abd_borrow_linear_copy(abd, size);
+	zio_checksum_SHA256(buf, size, zcp);
+	abd_return_linear(abd, buf, size);
+}
+
+void
+abd_fletcher_2_native(abd_t *abd, uint64_t size, zio_cksum_t *zcp)
+{
+	fletcher_2_native_init(zcp);
+	abd_iterate_rfunc(abd, size, fletcher_2_incremental_native, zcp);
+}
+
+void
+abd_fletcher_2_byteswap(abd_t *abd, uint64_t size, zio_cksum_t *zcp)
+{
+	fletcher_2_byteswap_init(zcp);
+	abd_iterate_rfunc(abd, size, fletcher_2_incremental_byteswap, zcp);
+}
+
+void
+abd_fletcher_4_native(abd_t *abd, uint64_t size, zio_cksum_t *zcp)
+{
+	fletcher_4_native_init(zcp);
+	abd_iterate_rfunc(abd, size, fletcher_4_incremental_native, zcp);
+}
+
+void
+abd_fletcher_4_byteswap(abd_t *abd, uint64_t size, zio_cksum_t *zcp)
+{
+	fletcher_4_byteswap_init(zcp);
+	abd_iterate_rfunc(abd, size, fletcher_4_incremental_byteswap, zcp);
 }
 
 zio_checksum_info_t zio_checksum_table[ZIO_CHECKSUM_FUNCTIONS] = {
 	{{NULL,			NULL},			0, 0, 0, "inherit"},
 	{{NULL,			NULL},			0, 0, 0, "on"},
-	{{zio_checksum_off,	zio_checksum_off},	0, 0, 0, "off"},
-	{{zio_checksum_SHA256,	zio_checksum_SHA256},	1, 1, 0, "label"},
-	{{zio_checksum_SHA256,	zio_checksum_SHA256},	1, 1, 0, "gang_header"},
-	{{fletcher_2_native,	fletcher_2_byteswap},	0, 1, 0, "zilog"},
-	{{fletcher_2_native,	fletcher_2_byteswap},	0, 0, 0, "fletcher2"},
-	{{fletcher_4_native,	fletcher_4_byteswap},	1, 0, 0, "fletcher4"},
-	{{zio_checksum_SHA256,	zio_checksum_SHA256},	1, 0, 1, "sha256"},
-	{{fletcher_4_native,	fletcher_4_byteswap},	0, 1, 0, "zilog2"},
+	{{abd_checksum_off,	abd_checksum_off},	0, 0, 0, "off"},
+	{{abd_checksum_SHA256,	abd_checksum_SHA256},	1, 1, 0, "label"},
+	{{abd_checksum_SHA256,	abd_checksum_SHA256},	1, 1, 0, "gang_header"},
+	{{abd_fletcher_2_native,abd_fletcher_2_byteswap},0, 1, 0, "zilog"},
+	{{abd_fletcher_2_native,abd_fletcher_2_byteswap},0, 0, 0, "fletcher2"},
+	{{abd_fletcher_4_native,abd_fletcher_4_byteswap},1, 0, 0, "fletcher4"},
+	{{abd_checksum_SHA256,	abd_checksum_SHA256},	1, 0, 1, "sha256"},
+	{{abd_fletcher_4_native,abd_fletcher_4_byteswap},0, 1, 0, "zilog2"},
 };
 
 enum zio_checksum
@@ -150,7 +187,7 @@ zio_checksum_label_verifier(zio_cksum_t *zcp, uint64_t offset)
  */
 void
 zio_checksum_compute(zio_t *zio, enum zio_checksum checksum,
-	void *data, uint64_t size)
+	abd_t *data, uint64_t size)
 {
 	blkptr_t *bp = zio->io_bp;
 	uint64_t offset = zio->io_offset;
@@ -160,17 +197,18 @@ zio_checksum_compute(zio_t *zio, enum zio_checksum checksum,
 	ASSERT((uint_t)checksum < ZIO_CHECKSUM_FUNCTIONS);
 	ASSERT(ci->ci_func[0] != NULL);
 
-	if (ci->ci_eck) {
+	if (ci->ci_eck && ABD_IS_LINEAR(data)) {
 		zio_eck_t *eck;
+		void *buf = ABD_TO_LINEAR(data);
 
 		if (checksum == ZIO_CHECKSUM_ZILOG2) {
-			zil_chain_t *zilc = data;
+			zil_chain_t *zilc = buf;
 
 			size = P2ROUNDUP_TYPED(zilc->zc_nused, ZIL_MIN_BLKSZ,
 			    uint64_t);
 			eck = &zilc->zc_eck;
 		} else {
-			eck = (zio_eck_t *)((char *)data + size) - 1;
+			eck = (zio_eck_t *)((char *)buf + size) - 1;
 		}
 		if (checksum == ZIO_CHECKSUM_GANG_HEADER)
 			zio_checksum_gang_verifier(&eck->zec_cksum, bp);
@@ -181,6 +219,40 @@ zio_checksum_compute(zio_t *zio, enum zio_checksum checksum,
 		eck->zec_magic = ZEC_MAGIC;
 		ci->ci_func[0](data, size, &cksum);
 		eck->zec_cksum = cksum;
+	} else if (ci->ci_eck) {
+		uint64_t eck_off, magic_off, cksum_off;
+		uint64_t magic = ZEC_MAGIC;
+		if (checksum == ZIO_CHECKSUM_ZILOG2) {
+			uint64_t nused_off = offsetof(zil_chain_t, zc_nused);
+			abd_copy_to_buf_off(&size, data, sizeof (uint64_t),
+			    nused_off);
+			size = P2ROUNDUP_TYPED(size, ZIL_MIN_BLKSZ,
+			    uint64_t);
+			eck_off = offsetof(zil_chain_t, zc_eck);
+		} else {
+			eck_off = size - sizeof (zio_eck_t);
+		}
+
+		cksum_off = eck_off + offsetof(zio_eck_t, zec_cksum);
+
+		if (checksum == ZIO_CHECKSUM_GANG_HEADER) {
+			zio_checksum_gang_verifier(&cksum, bp);
+			abd_copy_from_buf_off(data, &cksum, sizeof (zio_cksum_t),
+			    cksum_off);
+		} else if (checksum == ZIO_CHECKSUM_LABEL) {
+			zio_checksum_label_verifier(&cksum, offset);
+			abd_copy_from_buf_off(data, &cksum, sizeof (zio_cksum_t),
+			    cksum_off);
+		} else {
+			abd_copy_to_buf_off(&bp->blk_cksum, data,
+			    sizeof (zio_cksum_t), cksum_off);
+		}
+		magic_off = eck_off + offsetof(zio_eck_t, zec_magic);
+		abd_copy_from_buf_off(data, &magic, sizeof (uint64_t),
+		    magic_off);
+		ci->ci_func[0](data, size, &cksum);
+		abd_copy_from_buf_off(data, &cksum, sizeof (zio_cksum_t),
+		    cksum_off);
 	} else {
 		ci->ci_func[0](data, size, &bp->blk_cksum);
 	}
@@ -197,18 +269,19 @@ zio_checksum_error(zio_t *zio, zio_bad_cksum_t *info)
 	uint64_t size = (bp == NULL ? zio->io_size :
 	    (BP_IS_GANG(bp) ? SPA_GANGBLOCKSIZE : BP_GET_PSIZE(bp)));
 	uint64_t offset = zio->io_offset;
-	void *data = zio->io_data;
+	abd_t *data = zio->io_data;
 	zio_checksum_info_t *ci = &zio_checksum_table[checksum];
 	zio_cksum_t actual_cksum, expected_cksum, verifier;
 
 	if (checksum >= ZIO_CHECKSUM_FUNCTIONS || ci->ci_func[0] == NULL)
 		return (SET_ERROR(EINVAL));
 
-	if (ci->ci_eck) {
+	if (ci->ci_eck && ABD_IS_LINEAR(data)) {
 		zio_eck_t *eck;
+		void *buf = data;
 
 		if (checksum == ZIO_CHECKSUM_ZILOG2) {
-			zil_chain_t *zilc = data;
+			zil_chain_t *zilc = buf;
 			uint64_t nused;
 
 			eck = &zilc->zc_eck;
@@ -224,7 +297,7 @@ zio_checksum_error(zio_t *zio, zio_bad_cksum_t *info)
 
 			size = P2ROUNDUP_TYPED(nused, ZIL_MIN_BLKSZ, uint64_t);
 		} else {
-			eck = (zio_eck_t *)((char *)data + size) - 1;
+			eck = (zio_eck_t *)((char *)buf + size) - 1;
 		}
 
 		if (checksum == ZIO_CHECKSUM_GANG_HEADER)
@@ -243,6 +316,64 @@ zio_checksum_error(zio_t *zio, zio_bad_cksum_t *info)
 		eck->zec_cksum = verifier;
 		ci->ci_func[byteswap](data, size, &actual_cksum);
 		eck->zec_cksum = expected_cksum;
+
+		if (byteswap)
+			byteswap_uint64_array(&expected_cksum,
+			    sizeof (zio_cksum_t));
+	} else if (ci->ci_eck) {
+		uint64_t eck_off, magic_off, cksum_off;
+		uint64_t magic;
+		if (checksum == ZIO_CHECKSUM_ZILOG2) {
+			off_t nused_off;
+			uint64_t nused;
+			nused_off = offsetof(zil_chain_t, zc_nused);
+			eck_off = offsetof(zil_chain_t, zc_eck);
+			magic_off = eck_off + offsetof(zio_eck_t, zec_magic);
+			abd_copy_to_buf_off(&magic, data, sizeof (uint64_t),
+			    magic_off);
+
+			if (magic == ZEC_MAGIC) {
+				abd_copy_to_buf_off(&nused, data, sizeof (uint64_t),
+				    nused_off);
+			} else if (magic == BSWAP_64(ZEC_MAGIC)) {
+				abd_copy_to_buf_off(&nused, data, sizeof (uint64_t),
+				    nused_off);
+				nused = BSWAP_64(nused);
+			} else
+				return (SET_ERROR(ECKSUM));
+
+			if (nused > size)
+				return (SET_ERROR(ECKSUM));
+
+			size = P2ROUNDUP_TYPED(nused, ZIL_MIN_BLKSZ, uint64_t);
+		} else {
+			eck_off = size - sizeof (zio_eck_t);
+			magic_off = eck_off + offsetof(zio_eck_t, zec_magic);
+			abd_copy_to_buf_off(&magic, data, sizeof (uint64_t),
+			    magic_off);
+		}
+
+		if (checksum == ZIO_CHECKSUM_GANG_HEADER)
+			zio_checksum_gang_verifier(&verifier, bp);
+		else if (checksum == ZIO_CHECKSUM_LABEL)
+			zio_checksum_label_verifier(&verifier, offset);
+		else
+			verifier = bp->blk_cksum;
+
+		byteswap = (magic == BSWAP_64(ZEC_MAGIC));
+
+		if (byteswap)
+			byteswap_uint64_array(&verifier, sizeof (zio_cksum_t));
+
+		cksum_off = eck_off + offsetof(zio_eck_t, zec_cksum);
+		abd_copy_to_buf_off(&expected_cksum, data, sizeof (zio_cksum_t),
+		    cksum_off);
+
+		abd_copy_from_buf_off(data, &verifier, sizeof (zio_cksum_t),
+		    cksum_off);
+		ci->ci_func[byteswap](data, size, &actual_cksum);
+		abd_copy_from_buf_off(data, &expected_cksum, sizeof (zio_cksum_t),
+		    cksum_off);
 
 		if (byteswap)
 			byteswap_uint64_array(&expected_cksum,

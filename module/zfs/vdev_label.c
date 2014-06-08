@@ -187,7 +187,7 @@ vdev_label_read(zio_t *zio, vdev_t *vd, int l, void *buf, uint64_t offset,
 
 	zio_nowait(zio_read_phys(zio, vd,
 	    vdev_label_offset(vd->vdev_psize, l, offset),
-	    size, buf, ZIO_CHECKSUM_LABEL, done, private,
+	    size, LINEAR_TO_ABD(buf), ZIO_CHECKSUM_LABEL, done, private,
 	    ZIO_PRIORITY_SYNC_READ, flags, B_TRUE));
 }
 
@@ -203,7 +203,7 @@ vdev_label_write(zio_t *zio, vdev_t *vd, int l, void *buf, uint64_t offset,
 
 	zio_nowait(zio_write_phys(zio, vd,
 	    vdev_label_offset(vd->vdev_psize, l, offset),
-	    size, buf, ZIO_CHECKSUM_LABEL, done, private,
+	    size, LINEAR_TO_ABD(buf), ZIO_CHECKSUM_LABEL, done, private,
 	    ZIO_PRIORITY_SYNC_WRITE, flags, B_TRUE));
 }
 
@@ -886,7 +886,7 @@ vdev_uberblock_load_done(zio_t *zio)
 	vdev_t *vd = zio->io_vd;
 	spa_t *spa = zio->io_spa;
 	zio_t *rio = zio->io_private;
-	uberblock_t *ub = zio->io_data;
+	uberblock_t *ub = ABD_TO_LINEAR(zio->io_data);
 	struct ubl_cbdata *cbp = rio->io_private;
 
 	ASSERT3U(zio->io_size, ==, VDEV_UBERBLOCK_SIZE(vd));
@@ -907,7 +907,7 @@ vdev_uberblock_load_done(zio_t *zio)
 		mutex_exit(&rio->io_lock);
 	}
 
-	zio_buf_free(zio->io_data, zio->io_size);
+	zio_buf_free(ABD_TO_LINEAR(zio->io_data), zio->io_size);
 }
 
 static void
